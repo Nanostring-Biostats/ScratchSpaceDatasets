@@ -1,0 +1,2 @@
+id	name	description	url_header  url_pairwise	url_meta	url_emmeans
+1	Tumor differences between domains	FFPE Colon Cancer WTX	https://Nanostring-Biostats.github.io/ScratchSpaceDatasets/browser_bytes/DEE/study1/study_header.parquet	https://Nanostring-Biostats.github.io/ScratchSpaceDatasets/browser_bytes/DEE/study1/pairwise.parquet  https://Nanostring-Biostats.github.io/ScratchSpaceDatasets/browser_bytes/DEE/study1/cell_metadata.parquet	https://Nanostring-Biostats.github.io/ScratchSpaceDatasets/browser_bytes/DEE/study1/emmeans.parquet
