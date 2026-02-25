@@ -1,11 +1,13 @@
 name: Update Publication Tracker
 
-# Run this when code is pushed to main, AND allow manual triggering
 on:
   push:
     branches:
       - main
   workflow_dispatch: 
+  schedule:
+    # Runs at 08:00 and 20:00 UTC (Midnight and noon Pacific Time)
+    - cron: '0 8,20 * * *'
 
 permissions:
   contents: write
