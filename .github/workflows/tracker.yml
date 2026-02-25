@@ -1,0 +1,41 @@
+name: Update Publication Tracker
+
+# Run this when code is pushed to main, AND allow manual triggering
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: 
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Python script
+        env:
+          OPENALEXEMAIL: ${{ secrets.OPENALEXEMAIL }}
+        run: python scripts/update_tracker.py
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add publication_tracker/
+          
+          # check if files actually changed before trying to commit. 
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Automated data lake update: CosMx tracker" && git push)
