@@ -13,13 +13,14 @@ if not EMAIL:
 
 # 2. Setup directories and filenames
 output_dir = "publication_tracker"
-os.makedirs(output_dir, exist_ok=True) # Creates the folder if it doesn't exist
+os.makedirs(output_dir, exist_ok=True)
 
-tsv_filename = os.path.join(output_dir, 'cosmx_smi_publications.tsv')
+# Updated filename to reflect the broader scope
+tsv_filename = os.path.join(output_dir, 'spatial_publications.tsv')
 manifest_filename = os.path.join(output_dir, 'manifest.csv')
 
-# 3. Fetch Data
-base_url = f"https://api.openalex.org/works?filter=title_and_abstract.search:CosMx&mailto={EMAIL}&per-page=200"
+# 3. Fetch Data using OR logic (|) for CosMx, GeoMx, and AtoMx
+base_url = f"https://api.openalex.org/works?filter=title_and_abstract.search:CosMx|GeoMx|AtoMx&mailto={EMAIL}&per-page=200"
 all_results = []
 cursor = "*" 
 
@@ -46,32 +47,71 @@ print(f"Found {len(all_results)} publications.")
 # 4. Write the TSV data file
 with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f, delimiter='\t')
-    writer.writerow(['Title', 'Publication Date', 'Authors', 'Journal', 'DOI', 'Cited By'])
+    
+    # Expanded headers
+    headers = [
+        'Title', 'Publication Date', 'Authors', 'Institutions', 'Journal', 
+        'DOI', 'Cited By', 'Type', 'Open Access', 'Primary Topic', 
+        'Has_CosMx', 'Has_GeoMx', 'Has_AtoMx'
+    ]
+    writer.writerow(headers)
     
     for work in all_results:
+        # Title
         raw_title = work.get('title') or 'Unknown Title'
         clean_title = str(raw_title).replace('\n', ' ').replace('\t', ' ')
         pub_date = work.get('publication_date') or 'Unknown Date'
         doi = work.get('doi') or ''
         
         authorships = work.get('authorships', [])
+        
+        # Authors
         author_names = [a.get('author', {}).get('display_name', '') for a in authorships]
         authors_str = ", ".join(filter(None, author_names))
         
+        # Institutions (Gathering unique institutions across all authors)
+        institutions = set()
+        for a in authorships:
+            for inst in a.get('institutions', []):
+                inst_name = inst.get('display_name')
+                if inst_name:
+                    institutions.add(inst_name.replace('\n', ' ').replace('\t', ' '))
+        institutions_str = ", ".join(institutions)
+        
+        # Journal
         primary_location = work.get('primary_location') or {}
         source = primary_location.get('source') or {}
         raw_journal = source.get('display_name') or 'Unknown Journal'
         clean_journal = str(raw_journal).replace('\n', ' ').replace('\t', ' ')
         
+        # Citation Count
         cited_by = work.get('cited_by_count', 0)
         
-        writer.writerow([clean_title, pub_date, authors_str, clean_journal, doi, cited_by])
+        # New Metadata: Type, Open Access, Primary Topic
+        pub_type = work.get('type') or 'Unknown'
+        open_access_data = work.get('open_access') or {}
+        is_oa = open_access_data.get('is_oa', False)
+        primary_topic_data = work.get('primary_topic') or {}
+        primary_topic = primary_topic_data.get('display_name', 'Unknown')
+        
+        # Boolean Logic for Product Hits
+        title_lower = clean_title.lower()
+        abstract_keys = [k.lower() for k in (work.get('abstract_inverted_index') or {}).keys()]
+        
+        has_cosmx = 'cosmx' in title_lower or 'cosmx' in abstract_keys
+        has_geomx = 'geomx' in title_lower or 'geomx' in abstract_keys
+        has_atomx = 'atomx' in title_lower or 'atomx' in abstract_keys
+        
+        writer.writerow([
+            clean_title, pub_date, authors_str, institutions_str, clean_journal, 
+            doi, cited_by, pub_type, is_oa, primary_topic, 
+            has_cosmx, has_geomx, has_atomx
+        ])
 
 # 5. Write the Manifest file
-# We use UTC time so it is standardized for your dashboard
 with open(manifest_filename, mode='w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Tracker', 'Last_Updated_UTC', 'Total_Publications'])
-    writer.writerow(['CosMx', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), len(all_results)])
+    writer.writerow(['Spatial Biology', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), len(all_results)])
 
 print("Update complete!")
