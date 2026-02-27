@@ -118,10 +118,11 @@ with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
         title_lower = clean_title.lower()
         abstract_keys = [k.lower() for k in (work.get('abstract_inverted_index') or {}).keys()]
         
-        has_cosmx = 'cosmx' in title_lower or 'cosmx' in abstract_keys
-        has_geomx = 'geomx' in title_lower or 'geomx' in abstract_keys
-        has_atomx = 'atomx' in title_lower or 'atomx' in abstract_keys
-        has_ncounter = 'ncounter' in title_lower or 'ncounter' in abstract_keys
+        # Check for substrings inside the abstract keys
+        has_cosmx = 'cosmx' in title_lower or any('cosmx' in k for k in abstract_keys)
+        has_geomx = 'geomx' in title_lower or any('geomx' in k for k in abstract_keys)
+        has_atomx = 'atomx' in title_lower or any('atomx' in k for k in abstract_keys)
+        has_ncounter = 'ncounter' in title_lower or any('ncounter' in k for k in abstract_keys)
         
         writer.writerow([
             clean_title, pub_date, authors_str, institutions_str, clean_journal, 
