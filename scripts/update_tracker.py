@@ -19,8 +19,15 @@ os.makedirs(output_dir, exist_ok=True)
 tsv_filename = os.path.join(output_dir, 'spatial_publications.tsv')
 manifest_filename = os.path.join(output_dir, 'manifest.csv')
 
-# 3. Fetch Data using OR logic (|) for CosMx, GeoMx, and AtoMx
-base_url = f"https://api.openalex.org/works?filter=title_and_abstract.search:CosMx|GeoMx|AtoMx&mailto={EMAIL}&per-page=200"
+# Get the current year dynamically to prevent future-dated typos
+current_year = datetime.now(timezone.utc).year
+
+# 3. Fetch Data using OR logic (|) and apply year bounds directly in the OpenAlex API query
+# Added nCounter to the search and restricted publication_year to 2008 - current_year
+search_query = "CosMx|GeoMx|AtoMx|nCounter"
+year_filter = f"publication_year:2008-{current_year}"
+base_url = f"https://api.openalex.org/works?filter=title_and_abstract.search:{search_query},{year_filter}&mailto={EMAIL}&per-page=200"
+
 all_results = []
 cursor = "*" 
 
@@ -42,21 +49,34 @@ while cursor:
         print(f"Error: API returned status code {response.status_code}")
         break
 
-print(f"Found {len(all_results)} publications.")
+# Python-side validation to double-check dates and remove any malformed entries
+valid_results = []
+for work in all_results:
+    pub_date = work.get('publication_date')
+    if not pub_date:
+        continue
+    try:
+        pub_year = int(pub_date[:4])
+        if 2008 <= pub_year <= current_year:
+            valid_results.append(work)
+    except (ValueError, TypeError):
+        continue
+
+print(f"Found {len(valid_results)} valid publications (filtered from {len(all_results)} raw hits).")
 
 # 4. Write the TSV data file
 with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f, delimiter='\t')
     
-    # Expanded headers
+    # Expanded headers to include Has_nCounter
     headers = [
         'Title', 'Publication Date', 'Authors', 'Institutions', 'Journal', 
         'DOI', 'Cited By', 'Type', 'Open Access', 'Primary Topic', 
-        'Has_CosMx', 'Has_GeoMx', 'Has_AtoMx'
+        'Has_CosMx', 'Has_GeoMx', 'Has_AtoMx', 'Has_nCounter'
     ]
     writer.writerow(headers)
     
-    for work in all_results:
+    for work in valid_results:
         # Title
         raw_title = work.get('title') or 'Unknown Title'
         clean_title = str(raw_title).replace('\n', ' ').replace('\t', ' ')
@@ -101,17 +121,19 @@ with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
         has_cosmx = 'cosmx' in title_lower or 'cosmx' in abstract_keys
         has_geomx = 'geomx' in title_lower or 'geomx' in abstract_keys
         has_atomx = 'atomx' in title_lower or 'atomx' in abstract_keys
+        has_ncounter = 'ncounter' in title_lower or 'ncounter' in abstract_keys
         
         writer.writerow([
             clean_title, pub_date, authors_str, institutions_str, clean_journal, 
             doi, cited_by, pub_type, is_oa, primary_topic, 
-            has_cosmx, has_geomx, has_atomx
+            has_cosmx, has_geomx, has_atomx, has_ncounter
         ])
 
 # 5. Write the Manifest file
 with open(manifest_filename, mode='w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Tracker', 'Last_Updated_UTC', 'Total_Publications'])
-    writer.writerow(['Spatial Biology', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), len(all_results)])
+    # Updated to count valid_results rather than all_results
+    writer.writerow(['Spatial Biology', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), len(valid_results)])
 
 print("Update complete!")
