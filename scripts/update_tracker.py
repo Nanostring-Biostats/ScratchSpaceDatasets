@@ -4,9 +4,8 @@ import os
 import sys
 from datetime import datetime, timezone
 
-# 1. Pull the secret email from GitHub Actions environment
+# 1. Pull the secret email
 EMAIL = os.environ.get('OPENALEXEMAIL')
-
 if not EMAIL:
     print("Error: OPENALEXEMAIL environment variable not set.")
     sys.exit(1)
@@ -14,61 +13,78 @@ if not EMAIL:
 # 2. Setup directories and filenames
 output_dir = "publication_tracker"
 os.makedirs(output_dir, exist_ok=True)
-
-# Updated filename to reflect the broader scope
 tsv_filename = os.path.join(output_dir, 'spatial_publications.tsv')
 manifest_filename = os.path.join(output_dir, 'manifest.csv')
 
-# Get the current year dynamically to prevent future-dated typos
 current_year = datetime.now(timezone.utc).year
-
-# 3. Fetch Data using OR logic (|) and apply year bounds directly in the OpenAlex API query
-# Added nCounter to the search and restricted publication_year to 2008 - current_year
-search_query = "CosMx|GeoMx|AtoMx|nCounter"
 year_filter = f"publication_year:2008-{current_year}"
-base_url = f"https://api.openalex.org/works?filter=title_and_abstract.search:{search_query},{year_filter}&mailto={EMAIL}&per-page=200"
+base_url = "https://api.openalex.org/works"
 
-all_results = []
-cursor = "*" 
+# 3. Fetch Data: Loop through platforms individually
+platforms = ['CosMx', 'GeoMx', 'AtoMx', 'nCounter']
 
-print("Fetching data from OpenAlex...")
-while cursor:
-    url = f"{base_url}&cursor={cursor}"
-    response = requests.get(url)
+# Dictionary to store unique publications. Key = OpenAlex ID, Value = Dict of data & flags
+master_records = {}
+
+for platform in platforms:
+    print(f"Fetching data for: {platform}...")
     
-    if response.status_code == 200:
-        data = response.json()
-        current_page_results = data.get('results', [])
+    params = {
+        "filter": f"default.search:{platform},{year_filter}",
+        "mailto": EMAIL,
+        "per-page": 200,
+    }
+    
+    cursor = "*" 
+    while cursor:
+        params['cursor'] = cursor
+        response = requests.get(base_url, params=params)
         
-        if not current_page_results:
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('results', [])
+            if not results:
+                break
+                
+            for work in results:
+                work_id = work.get('id')
+                
+                # Basic date validation to skip malformed entries
+                pub_date = work.get('publication_date')
+                if not pub_date:
+                    continue
+                try:
+                    pub_year = int(pub_date[:4])
+                    if not (2008 <= pub_year <= current_year):
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                
+                # If we haven't seen this paper yet, add it to our master dictionary
+                if work_id not in master_records:
+                    master_records[work_id] = {
+                        'data': work,
+                        'Has_CosMx': False,
+                        'Has_GeoMx': False,
+                        'Has_AtoMx': False,
+                        'Has_nCounter': False
+                    }
+                
+                # Flip the flag for whichever platform loop we are currently in
+                flag_key = f"Has_{platform}"
+                master_records[work_id][flag_key] = True
+                
+            cursor = data.get('meta', {}).get('next_cursor')
+        else:
+            print(f"Error fetching {platform}: API returned {response.status_code}")
             break
-            
-        all_results.extend(current_page_results)
-        cursor = data.get('meta', {}).get('next_cursor')
-    else:
-        print(f"Error: API returned status code {response.status_code}")
-        break
 
-# Python-side validation to double-check dates and remove any malformed entries
-valid_results = []
-for work in all_results:
-    pub_date = work.get('publication_date')
-    if not pub_date:
-        continue
-    try:
-        pub_year = int(pub_date[:4])
-        if 2008 <= pub_year <= current_year:
-            valid_results.append(work)
-    except (ValueError, TypeError):
-        continue
-
-print(f"Found {len(valid_results)} valid publications (filtered from {len(all_results)} raw hits).")
+print(f"Found {len(master_records)} unique valid publications.")
 
 # 4. Write the TSV data file
 with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f, delimiter='\t')
     
-    # Expanded headers to include Has_nCounter
     headers = [
         'Title', 'Publication Date', 'Authors', 'Institutions', 'Journal', 
         'DOI', 'Cited By', 'Type', 'Open Access', 'Primary Topic', 
@@ -76,7 +92,9 @@ with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
     ]
     writer.writerow(headers)
     
-    for work in valid_results:
+    for work_id, record in master_records.items():
+        work = record['data']
+        
         # Title
         raw_title = work.get('title') or 'Unknown Title'
         clean_title = str(raw_title).replace('\n', ' ').replace('\t', ' ')
@@ -89,7 +107,7 @@ with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
         author_names = [a.get('author', {}).get('display_name', '') for a in authorships]
         authors_str = ", ".join(filter(None, author_names))
         
-        # Institutions (Gathering unique institutions across all authors)
+        # Institutions
         institutions = set()
         for a in authorships:
             for inst in a.get('institutions', []):
@@ -104,37 +122,24 @@ with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
         raw_journal = source.get('display_name') or 'Unknown Journal'
         clean_journal = str(raw_journal).replace('\n', ' ').replace('\t', ' ')
         
-        # Citation Count
+        # Citation Count, Type, OA, Topic
         cited_by = work.get('cited_by_count', 0)
-        
-        # New Metadata: Type, Open Access, Primary Topic
         pub_type = work.get('type') or 'Unknown'
         open_access_data = work.get('open_access') or {}
         is_oa = open_access_data.get('is_oa', False)
         primary_topic_data = work.get('primary_topic') or {}
         primary_topic = primary_topic_data.get('display_name', 'Unknown')
         
-        # Boolean Logic for Product Hits
-        title_lower = clean_title.lower()
-        abstract_keys = [k.lower() for k in (work.get('abstract_inverted_index') or {}).keys()]
-        
-        # Check for substrings inside the abstract keys
-        has_cosmx = 'cosmx' in title_lower or any('cosmx' in k for k in abstract_keys)
-        has_geomx = 'geomx' in title_lower or any('geomx' in k for k in abstract_keys)
-        has_atomx = 'atomx' in title_lower or any('atomx' in k for k in abstract_keys)
-        has_ncounter = 'ncounter' in title_lower or any('ncounter' in k for k in abstract_keys)
-        
         writer.writerow([
             clean_title, pub_date, authors_str, institutions_str, clean_journal, 
             doi, cited_by, pub_type, is_oa, primary_topic, 
-            has_cosmx, has_geomx, has_atomx, has_ncounter
+            record['Has_CosMx'], record['Has_GeoMx'], record['Has_AtoMx'], record['Has_nCounter']
         ])
 
 # 5. Write the Manifest file
 with open(manifest_filename, mode='w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Tracker', 'Last_Updated_UTC', 'Total_Publications'])
-    # Updated to count valid_results rather than all_results
-    writer.writerow(['Spatial Biology', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), len(valid_results)])
+    writer.writerow(['Spatial Biology', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), len(master_records)])
 
 print("Update complete!")
