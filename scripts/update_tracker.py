@@ -4,8 +4,9 @@ import os
 import sys
 from datetime import datetime, timezone
 
-# 1. Pull the secret email
+# 1. Pull the secret email from GitHub Actions environment
 EMAIL = os.environ.get('OPENALEXEMAIL')
+
 if not EMAIL:
     print("Error: OPENALEXEMAIL environment variable not set.")
     sys.exit(1)
@@ -13,24 +14,34 @@ if not EMAIL:
 # 2. Setup directories and filenames
 output_dir = "publication_tracker"
 os.makedirs(output_dir, exist_ok=True)
+
 tsv_filename = os.path.join(output_dir, 'spatial_publications.tsv')
 manifest_filename = os.path.join(output_dir, 'manifest.csv')
 
 current_year = datetime.now(timezone.utc).year
+
+# 3. Search configuration
+# Dictionary maps the specific platform flag to the exact query sent to OpenAlex
+platforms = {
+    'CellScape': 'Cellscape',
+    'CosMx': 'CosMx',
+    'GeoMx': 'GeoMx',
+    'AtoMx': 'AtoMx',
+    'nCounter': '(nCounter OR nanostring)' # historically, some papers referred to nCounter simply as "NanoString"
+}
+
 year_filter = f"publication_year:2008-{current_year}"
 base_url = "https://api.openalex.org/works"
 
-# 3. Fetch Data: Loop through platforms individually
-platforms = ['CosMx', 'GeoMx', 'AtoMx', 'nCounter']
+# Dictionary to store unique publications. Key = OpenAlex ID
+main_records = {}
 
-# Dictionary to store unique publications. Key = OpenAlex ID, Value = Dict of data & flags
-master_records = {}
-
-for platform in platforms:
-    print(f"Fetching data for: {platform}...")
+for platform_key, search_query in platforms.items():
+    print(f"Fetching data for: {platform_key}...")
     
+    # 'default.search' tells OpenAlex to search the title, abstract, AND full text
     params = {
-        "filter": f"default.search:{platform},{year_filter}",
+        "filter": f"default.search:{search_query},{year_filter}",
         "mailto": EMAIL,
         "per-page": 200,
     }
@@ -43,6 +54,7 @@ for platform in platforms:
         if response.status_code == 200:
             data = response.json()
             results = data.get('results', [])
+            
             if not results:
                 break
                 
@@ -60,9 +72,9 @@ for platform in platforms:
                 except (ValueError, TypeError):
                     continue
                 
-                # If we haven't seen this paper yet, add it to our master dictionary
-                if work_id not in master_records:
-                    master_records[work_id] = {
+                # Initialize the record if it's the first time seeing this paper
+                if work_id not in main_records:
+                    main_records[work_id] = {
                         'data': work,
                         'Has_CosMx': False,
                         'Has_GeoMx': False,
@@ -70,76 +82,86 @@ for platform in platforms:
                         'Has_nCounter': False
                     }
                 
-                # Flip the flag for whichever platform loop we are currently in
-                flag_key = f"Has_{platform}"
-                master_records[work_id][flag_key] = True
+                # Flip the flag using the dictionary key
+                main_records[work_id][f'Has_{platform_key}'] = True
                 
             cursor = data.get('meta', {}).get('next_cursor')
         else:
-            print(f"Error fetching {platform}: API returned {response.status_code}")
+            print(f"Error fetching {platform_key}: API returned {response.status_code}")
+            print("Response details:", response.text)
             break
 
-print(f"Found {len(master_records)} unique valid publications.")
+print(f"Found {len(main_records)} unique valid publications.")
 
 # 4. Write the TSV data file
+print("Writing TSV file...")
 with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f, delimiter='\t')
     
     headers = [
         'Title', 'Publication Date', 'Authors', 'Institutions', 'Journal', 
-        'DOI', 'Cited By', 'Type', 'Open Access', 'Primary Topic', 
+        'DOI', 'Cited By', 'Type', 'Open Access', 
+        'Primary Topic', 'Subfield', 'Field', 'Domain', 'All Topics', 'Has_CellScape',
         'Has_CosMx', 'Has_GeoMx', 'Has_AtoMx', 'Has_nCounter'
     ]
     writer.writerow(headers)
     
-    for work_id, record in master_records.items():
+    for work_id, record in main_records.items():
         work = record['data']
         
-        # Title
-        raw_title = work.get('title') or 'Unknown Title'
-        clean_title = str(raw_title).replace('\n', ' ').replace('\t', ' ')
+        # Text cleaning helper to prevent TSV formatting errors
+        def clean_text(text):
+            return str(text).replace('\n', ' ').replace('\t', ' ') if text else 'Unknown'
+        
+        # Title & Basic Metadata
+        clean_title = clean_text(work.get('title'))
         pub_date = work.get('publication_date') or 'Unknown Date'
         doi = work.get('doi') or ''
+        cited_by = work.get('cited_by_count', 0)
+        pub_type = work.get('type') or 'Unknown'
+        is_oa = (work.get('open_access') or {}).get('is_oa', False)
         
+        # Authors & Institutions
         authorships = work.get('authorships', [])
-        
-        # Authors
         author_names = [a.get('author', {}).get('display_name', '') for a in authorships]
         authors_str = ", ".join(filter(None, author_names))
         
-        # Institutions
         institutions = set()
         for a in authorships:
             for inst in a.get('institutions', []):
                 inst_name = inst.get('display_name')
                 if inst_name:
-                    institutions.add(inst_name.replace('\n', ' ').replace('\t', ' '))
+                    institutions.add(clean_text(inst_name))
         institutions_str = ", ".join(institutions)
         
         # Journal
         primary_location = work.get('primary_location') or {}
         source = primary_location.get('source') or {}
-        raw_journal = source.get('display_name') or 'Unknown Journal'
-        clean_journal = str(raw_journal).replace('\n', ' ').replace('\t', ' ')
+        clean_journal = clean_text(source.get('display_name'))
         
-        # Citation Count, Type, OA, Topic
-        cited_by = work.get('cited_by_count', 0)
-        pub_type = work.get('type') or 'Unknown'
-        open_access_data = work.get('open_access') or {}
-        is_oa = open_access_data.get('is_oa', False)
+        # Topics & Hierarchy
         primary_topic_data = work.get('primary_topic') or {}
         primary_topic = primary_topic_data.get('display_name', 'Unknown')
+        subfield = (primary_topic_data.get('subfield') or {}).get('display_name', 'Unknown')
+        field = (primary_topic_data.get('field') or {}).get('display_name', 'Unknown')
+        domain = (primary_topic_data.get('domain') or {}).get('display_name', 'Unknown')
+        
+        topics_list = work.get('topics', [])
+        topic_names = [t.get('display_name') for t in topics_list if t.get('display_name')]
+        all_topics = "; ".join(topic_names) if topic_names else "Unknown"
         
         writer.writerow([
             clean_title, pub_date, authors_str, institutions_str, clean_journal, 
-            doi, cited_by, pub_type, is_oa, primary_topic, 
+            doi, cited_by, pub_type, is_oa, 
+            primary_topic, subfield, field, domain, all_topics,
             record['Has_CosMx'], record['Has_GeoMx'], record['Has_AtoMx'], record['Has_nCounter']
         ])
 
 # 5. Write the Manifest file
+print("Writing Manifest file...")
 with open(manifest_filename, mode='w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Tracker', 'Last_Updated_UTC', 'Total_Publications'])
-    writer.writerow(['Spatial Biology', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), len(master_records)])
+    writer.writerow(['Spatial Biology', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), len(main_records)])
 
 print("Update complete!")
