@@ -52,7 +52,7 @@ platforms = {
 }
 
 year_filter = f"publication_year:2008-{current_year}"
-base_url = "[https://api.openalex.org/works](https://api.openalex.org/works)"
+base_url = "https://api.openalex.org/works"
 
 # Dictionary to store unique publications. Key = OpenAlex ID
 main_records = {}
