@@ -76,6 +76,7 @@ for platform_key, search_query in platforms.items():
                 if work_id not in main_records:
                     main_records[work_id] = {
                         'data': work,
+                        'Has_CellScape':  False,
                         'Has_CosMx': False,
                         'Has_GeoMx': False,
                         'Has_AtoMx': False,
@@ -153,7 +154,7 @@ with open(tsv_filename, mode='w', newline='', encoding='utf-8') as f:
         writer.writerow([
             clean_title, pub_date, authors_str, institutions_str, clean_journal, 
             doi, cited_by, pub_type, is_oa, 
-            primary_topic, subfield, field, domain, all_topics,
+            primary_topic, subfield, field, domain, all_topics, record['Has_CellScape'],
             record['Has_CosMx'], record['Has_GeoMx'], record['Has_AtoMx'], record['Has_nCounter']
         ])
 
