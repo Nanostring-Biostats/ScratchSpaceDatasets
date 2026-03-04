@@ -135,7 +135,7 @@ if os.path.exists(added_filename):
             
             # If we don't already have this paper, download its metadata from OpenAlex
             if work_id not in main_records:
-                single_url = f"[https://api.openalex.org/works/](https://api.openalex.org/works/){work_id}?mailto={EMAIL}"
+                single_url = f"https://api.openalex.org/works/{work_id}?mailto={EMAIL}"
                 response = requests.get(single_url)
                 if response.status_code == 200:
                     work_data = response.json()
